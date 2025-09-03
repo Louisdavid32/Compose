@@ -110,7 +110,7 @@ class TeacherSubject(models.Model):
     subject = models.ForeignKey("core.Subject", on_delete=models.PROTECT, related_name="teacher_links")
 
     establishment = models.ForeignKey(
-        EstablishmentProfile,
+        Establishment,
         on_delete=models.PROTECT,
         related_name="teacher_subject_links",
         help_text="Copie de l'établissement pour ce lien (optimisation de filtres).",
@@ -159,7 +159,7 @@ class TeacherLevel(models.Model):
     level = models.ForeignKey("core.Level", on_delete=models.PROTECT, related_name="teacher_links")
 
     establishment = models.ForeignKey(
-        EstablishmentProfile,
+        Establishment,
         on_delete=models.PROTECT,
         related_name="teacher_level_links",
         help_text="Copie de l'établissement pour ce lien (optimisation de filtres).",

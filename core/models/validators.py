@@ -80,3 +80,23 @@ def validate_central_africa_phone(value: str) -> None:
             "Numéro hors zone CEMAC. Préfixe attendu parmi: "
             + ", ".join(sorted(CENTRAL_AFRICA_E164_PREFIXES))
         )
+
+
+# --- Année scolaire ---
+SCHOOL_YEAR_RE = re.compile(r"^(20\d{2})-(20\d{2})$")  # ex: 2024-2025
+
+def validate_school_year(value: str) -> None:
+    """
+    Valide une année scolaire au format 'YYYY-YYYY' avec année2 = année1 + 1.
+    Exemples valides: 2023-2024, 2024-2025.
+    """
+    if not value:
+        raise ValidationError("L'année scolaire est requise (ex: 2024-2025).")
+    m = SCHOOL_YEAR_RE.match(value.strip())
+    if not m:
+        raise ValidationError('Format invalide. Utiliser "YYYY-YYYY" (ex: 2024-2025).')
+    start, end = int(m.group(1)), int(m.group(2))
+    if end - start != 1:
+        raise ValidationError("Année scolaire incohérente: la deuxième année doit être la première + 1.")
+    if not (2000 <= start <= 2100):
+        raise ValidationError("Année scolaire hors plage autorisée (2000-2100).")
