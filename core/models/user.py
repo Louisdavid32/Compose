@@ -34,6 +34,7 @@ from django.core.validators import EmailValidator
 from django.db import models
 from django.utils import timezone
 
+
 from .establishment import Establishment
 from .validators import validate_central_africa_phone
 
@@ -171,27 +172,40 @@ class User(AbstractBaseUser, PermissionsMixin):
 # ----------------------------------
 # Rôles par établissement (RBAC-tenant)
 # ----------------------------------
+
+
 class TenantRole(models.TextChoices):
     ADMIN = "admin", "Administrateur établissement"
     TEACHER = "teacher", "Professeur"
     STUDENT = "student", "Apprenant"
     SECRETARY = "secretary", "Secrétaire"
+    # (tu peux ajouter "establishment_owner" si tu veux tracer l’owner comme un rôle)
 
 
 class UserRole(models.Model):
-    """Association (n-N) entre un utilisateur et un établissement avec un rôle.
-
-    - Un utilisateur peut avoir plusieurs rôles dans un même établissement
-      (ex: professeur ET secrétaire si nécessaire)
-    - Plusieurs secrétaires par établissement: aucun verrou bloquant
-    - Unicité protégée: (user, establishment, role) unique → pas de doublons inutiles
     """
+    Rôle(s) d'un utilisateur dans un établissement (multi-rôles possibles).
 
+    - Scopé par tenant via FK 'establishment'
+    - Garantit l'absence de doublons (user, establishment, role)
+    - Valide la cohérence multi-tenant (user.establishment == establishment)
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="roles")
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="roles",
+        help_text="Utilisateur concerné."
+    )
 
-    role = models.CharField(max_length=20, choices=TenantRole.choices)
+    establishment = models.ForeignKey(
+        Establishment, on_delete=models.CASCADE, related_name="user_roles",
+        help_text="Établissement (tenant) pour lequel ce rôle s'applique."
+    )
+
+    role = models.CharField(
+        max_length=20, choices=TenantRole.choices,
+        help_text="Rôle accordé à l'utilisateur dans cet établissement."
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -199,7 +213,13 @@ class UserRole(models.Model):
         db_table = "core_user_role"
         verbose_name = "Rôle utilisateur"
         verbose_name_plural = "Rôles utilisateurs"
-        unique_together = (("user", "establishment", "role"),)
+        constraints = [
+            # Un rôle ne peut pas être dupliqué pour le même user dans le même tenant
+            models.UniqueConstraint(
+                fields=["user", "establishment", "role"],
+                name="uq_userrole_user_estab_role",
+            ),
+        ]
         indexes = [
             models.Index(fields=["establishment", "role"], name="idx_role_estab_role"),
             models.Index(fields=["user"], name="idx_role_user"),
@@ -207,19 +227,46 @@ class UserRole(models.Model):
         ordering = ["establishment_id", "role", "-created_at"]
 
     def __str__(self) -> str:  # pragma: no cover
-        return f"{self.user.email} @ {self.establishment.slug} [{self.get_role_display()}]"
+        return f"{self.user.email} @ {getattr(self.establishment, 'slug', self.establishment_id)} [{self.get_role_display()}]"
 
+    # ------------ Intégrité multi-tenant ------------
     def clean(self) -> None:
+        # établissement obligatoire
+        if not self.establishment_id:
+            raise ValidationError({"establishment": "Établissement requis."})
+
+        # l'utilisateur doit appartenir au même tenant (selon ton design: 1 seul établissement par user)
+        if not self.user.establishment_id or self.user.establishment_id != self.establishment_id:
+            raise ValidationError({
+                "user": "Cet utilisateur n'appartient pas à cet établissement.",
+                "establishment": "Doit égaler user.establishment."
+            })
+
+        # rôle requis
         if not self.role:
             raise ValidationError({"role": "Le rôle est obligatoire."})
 
-    # Helpers pratiques
+    def save(self, *args, **kwargs):
+        # Sécurité: validation serveur systématique
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    # ------------ Helpers pratiques ------------
     @staticmethod
     def assign(user: User, establishment: Establishment, role: str) -> "UserRole":
-        """Idempotent: crée si absent, sinon retourne l'existant."""
-        obj, _ = UserRole.objects.get_or_create(user=user, establishment=establishment, role=role)
+        """
+        Idempotent: crée le rôle si absent, retourne l'existant sinon.
+        Valide que 'user' appartient bien à 'establishment'.
+        """
+        if user.establishment_id != establishment.id:
+            raise ValidationError("user.establishment != establishment")
+        obj, _created = UserRole.objects.get_or_create(
+            user=user, establishment=establishment, role=role
+        )
         return obj
 
     @staticmethod
     def has_role(user: User, establishment: Establishment, role: str) -> bool:
-        return UserRole.objects.filter(user=user, establishment=establishment, role=role).exists()
+        return UserRole.objects.filter(
+            user=user, establishment=establishment, role=role
+        ).exists()

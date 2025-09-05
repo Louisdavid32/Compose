@@ -24,6 +24,10 @@ from core.models.establishment import Establishment
 from core.models.validators import validate_school_year
 
 
+from core.models.program import Program
+from core.models.establishment import Establishment
+
+
 class TeacherProfile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -190,3 +194,58 @@ class TeacherLevel(models.Model):
 
     def __str__(self):
         return f"{self.teacher.user.full_name} → {getattr(self.level, 'name', self.level_id)}"
+
+
+
+class TeacherProgram(models.Model):
+    """
+    Liaison Professeur ↔ Filière (Program) — multi-tenant
+    - Unicité (teacher, program)
+    - Contrôle d'établissement (prof/program/lien dans le même tenant)
+    - Index pour filtres massifs par tenant
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    teacher = models.ForeignKey(
+        TeacherProfile, on_delete=models.CASCADE, related_name="program_links"
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="teacher_links"
+    )
+
+    establishment = models.ForeignKey(
+        Establishment,  # ou Establishment selon ta classe réelle
+        on_delete=models.PROTECT,
+        related_name="teacher_program_links",
+        help_text="Copie de l'établissement pour filtres rapides (tenant).",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "core_teacher_program"
+        constraints = [
+            models.UniqueConstraint(fields=["teacher", "program"], name="uq_teacher_program_once"),
+        ]
+        indexes = [
+            models.Index(fields=["establishment", "program"], name="idx_tprog_estab_program"),
+            models.Index(fields=["teacher"], name="idx_tprog_teacher"),
+        ]
+        ordering = ["teacher_id", "program_id"]
+
+    def clean(self):
+        # 1) Prof et lien dans le même tenant
+        if self.teacher.establishment_id != self.establishment_id:
+            raise ValidationError({"establishment": "Doit égaler l'établissement du professeur."})
+        # 2) Program dans le même tenant
+        if self.program.establishment_id != self.establishment_id:
+            raise ValidationError({"program": "La filière doit appartenir au même établissement (tenant)."})
+
+    def save(self, *args, **kwargs):
+        if not self.establishment_id and self.teacher_id:
+            self.establishment_id = self.teacher.establishment_id
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.teacher.user.full_name} ↔ {getattr(self.program, 'code', self.program_id)}"
